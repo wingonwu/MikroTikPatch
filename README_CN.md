@@ -4,14 +4,14 @@
 
 ### 下载 [最新](https://github.com/elseif/MikroTikPatch/releases/latest) 的iso文件安装RouterOS.
 ### CHR镜像文件同时支持BIOS和UEFI启动模式
-
+### 支持在线升级
 
 ![](install.png)
 ![](routeros.png)
 
 ### x86模式授权许可
 ![](x86.png)
-### chr模式授权许可
+### chr模式授权许可，支持在线授权许可
 ![](chr.png)
 
 ## 如何使用Shell
@@ -21,6 +21,7 @@
     进入shell
     运行 keygen
     参考上图。
+    Chr镜像支持在线授权许可
 ## 如何使用Python
     安装 python3-{version}.npk 包
     telnet到RouterOS,用户名devel,密码与admin的密码相同

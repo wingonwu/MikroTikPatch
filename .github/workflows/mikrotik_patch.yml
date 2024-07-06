@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   Patch_RouterOS_7:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     strategy:
       matrix:
         channel: [stable, testing]
@@ -25,6 +25,7 @@ jobs:
       TZ: 'Asia/Shanghai'
       LATEST_VERSION_URL: 'https://upgrade.mikrotik.com/routeros/NEWESTa7'
       LATEST_VERSION: ""
+      BUILD_TIME: "0"
       CUSTOM_LICENSE_PRIVATE_KEY: ${{ secrets.CUSTOM_LICENSE_PRIVATE_KEY }}
       CUSTOM_LICENSE_PUBLIC_KEY: ${{ secrets.CUSTOM_LICENSE_PUBLIC_KEY }}
       CUSTOM_NPK_SIGN_PRIVATE_KEY: ${{ secrets.CUSTOM_NPK_SIGN_PRIVATE_KEY }}
@@ -56,20 +57,17 @@ jobs:
     - name: Create Squashfs for option and python3
       if: steps.cache-squashfs.outputs.cache-hit != 'true'
       run: |
-        sudo wget -O bash -nv https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox_ASH
-        sudo wget -O busybox -nv https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox
-        sudo chmod +x busybox
-        sudo chmod +x bash
         sudo mkdir -p ./option-root/bin/
-        sudo mv busybox ./option-root/bin/
-        sudo mv bash ./option-root/bin/
-        COMMANDS=$(./option-root/bin/busybox --list)
+        sudo cp busybox/busybox_x86_64 ./option-root/bin/busybox
+        sudo chmod +x ./option-root/bin/busybox
+        sudo chmod +x ./busybox/busybox_x86_64
+        COMMANDS=$(./busybox/busybox_x86_64 --list)
         for cmd in $COMMANDS; do
             sudo ln -sf /pckg/option/bin/busybox ./option-root/bin/$cmd
         done
         sudo mksquashfs option-root option.sfs -quiet -comp xz -no-xattrs -b 256k
         sudo rm -rf option-root
-        sudo wget -O cpython-3.11.9.tar.gz -nv https://github.com/indygreg/python-build-standalone/releases/download/20240415/cpython-3.11.9+20240415-x86_64-unknown-linux-musl-install_only.tar.gz
+        sudo wget -O cpython-3.11.9.tar.gz -nv https://github.com/indygreg/python-build-standalone/releases/download/20240415/cpython-3.11.9+20240415-x86_64-unknown-linux-gnu-install_only.tar.gz
         sudo tar -xf cpython-3.11.9.tar.gz
         sudo rm cpython-3.11.9.tar.gz
         sudo rm -rf ./python/include
@@ -85,10 +83,13 @@ jobs:
         else
           LATEST_VERSION=${{ inputs.version }}
         fi  
+        BUILD_TIME=$(date +"%s")
         echo Latest Version:$LATEST_VERSION
-        wget -nv -O CHANGELOG.txt https://upgrade.mikrotik.com/routeros/$LATEST_VERSION/CHANGELOG
-        cat CHANGELOG.txt
+        echo Build Time:$BUILD_TIME
+        wget -nv -O CHANGELOG https://upgrade.mikrotik.com/routeros/$LATEST_VERSION/CHANGELOG
+        cat CHANGELOG
         echo "LATEST_VERSION=${LATEST_VERSION}" >> $GITHUB_ENV
+        echo "BUILD_TIME=${BUILD_TIME}" >> $GITHUB_ENV
 
     - name: Cache Mikrotik ${{ env.LATEST_VERSION }}
       id: cache-mikrotik
@@ -171,15 +172,19 @@ jobs:
     - name: Create install-image-${{ env.LATEST_VERSION }}.img
       run: |
         sudo modprobe nbd
-        sudo apt install -y qemu-utils extlinux > /dev/null
-        sudo xxd -p -u /usr/bin/extlinux | tr -d '\n' | sed  \
+        sudo apt-get install -y qemu-utils extlinux > /dev/null
+        # Loading system
+        # Copyright (C) 1994-2015 H. Peter Anvin et al
+        # 20210811
+        # CHS EDD
+        sudo xxd -p -u /usr/bin/extlinux | tr -d '\n' | sed \
           -e 's/0D0A5359534C494E555820362E30342000/4C6F6164696E672073797374656D0D0A00/g' \
           -e 's/20436F707972696768742028432920313939342D3230313520482E20506574657220416E76696E20657420616C0D0A/00436F707972696768742028432920313939342D3230313520482E20506574657220416E76696E20657420616C0D0A/g' \
           -e 's/203230323130383131/003230323130383131/g' \
-          -e 's/43485300454444/00485300004444/g' | xxd -p -r >extlinux
+          -e 's/43485300454444/00485300004444/g' | xxd -p -r >extlinux 
         sudo chmod +x extlinux
         
-        truncate --size 256M install-image-$LATEST_VERSION.img
+        truncate --size 128M install-image-$LATEST_VERSION.img
         sudo qemu-nbd -c /dev/nbd0 -f raw install-image-$LATEST_VERSION.img
         sudo mkfs.vfat -n "Install" /dev/nbd0
         sudo mkdir ./install
@@ -216,7 +221,7 @@ jobs:
     - name: Create chr-${{ env.LATEST_VERSION }}.img
       run: |
 
-        truncate --size 256M chr-$LATEST_VERSION.img
+        truncate --size 128M chr-$LATEST_VERSION.img
         sgdisk --clear --set-alignment=2 \
             --new=1::+32M --typecode=1:8300 --change-name=1:"RouterOS Boot" --attributes=1:set:2 \
             --new=2::-0 --typecode=2:8300 --change-name=2:"RouterOS" \
@@ -274,13 +279,14 @@ jobs:
     - name: Upload Files
       run: |
         mkdir -p ./publish/$LATEST_VERSION
-        cp CHANGELOG.txt ./publish/$LATEST_VERSION/CHANGELOG
+        echo $LATEST_VERSION $BUILD_TIME > ./publish/NEWESTa7.${{ matrix.channel }}
+        cp CHANGELOG ./publish/$LATEST_VERSION/
         cp ./new_iso/*.npk ./publish/$LATEST_VERSION/
-        echo $LATEST_VERSION $(date +"%s") > ./publish/NEWESTa7.${{ matrix.channel }}
+        cp linux ./publish/$LATEST_VERSION/BOOTX64.EFI
         sudo apt-get install -y lftp > /dev/null 2>&1
         sudo -E lftp -u ${{ secrets.SSH_USERNAME }},'${{ secrets.SSH_PASSWORD }}' sftp://${{ secrets.SSH_SERVER }}:${{ secrets.SSH_PORT }} <<EOF
         set sftp:auto-confirm yes
-        mirror --reverse --verbose ./publish ${{ secrets.SSH_DIRECTORY }}
+        mirror --reverse --verbose --only-newer ./publish ${{ secrets.SSH_DIRECTORY }}
         bye
         EOF
 
@@ -303,7 +309,7 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         name: "RouterOS ${{ env.LATEST_VERSION }}"
-        body_path: "CHANGELOG.txt"
+        body_path: "CHANGELOG"
         tag_name: ${{ env.LATEST_VERSION }}
         make_latest:  ${{ matrix.channel == 'stable'}}
         prerelease:  ${{ matrix.channel == 'testing' }}
