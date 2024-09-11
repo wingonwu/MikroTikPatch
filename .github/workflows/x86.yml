@@ -1,4 +1,4 @@
-name: Patch Mikrotik RouterOS 7.x
+name: x86
 on:
   # push:
   #   branches: [ "main" ]
